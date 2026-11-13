@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tgct526g-audit"
-version = "0.1.1"
+version = "0.2.0"
 description = "电信天翼TGCT526G宽带账号及超密获取软件（M1 只读检测：LuCI 登录、宽带凭据读取、默认超管检测）"
 readme = "README.md"
 requires-python = ">=3.10"

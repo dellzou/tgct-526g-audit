@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 
 Set-Location $PSScriptRoot
 $env:PYTHONPATH = Join-Path $PSScriptRoot "src"
-$version = "0.1.1"
+$version = "0.2.0"
 
 # Remove old onedir output so a locked/stale exe can never be paired with a
 # freshly collected _internal directory.

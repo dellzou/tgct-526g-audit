@@ -1,9 +1,10 @@
-"""Light-theme Windows desktop UI for the M1 read-only audit."""
+"""Light-theme Windows desktop UI for the M1.2 read-only audit."""
 
 from __future__ import annotations
 
 import argparse
 import ctypes
+import glob
 import json
 import os
 import queue
@@ -12,12 +13,15 @@ import sys
 import tempfile
 import threading
 import tkinter as tk
+import traceback
 from datetime import datetime
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
+from .appconfig import load_config, save_config
 from .audit import AuditCancelled, run_audit
+from .crypto import CryptoUnavailable, encrypt_bytes
 from .license_text import LICENSE_SUMMARY, LICENSE_TEXT, LICENSE_TITLE
-from .models import AuditResult, Target, mask_secret
+from .models import AuditResult, Target
 from .version import APP_NAME, BUILD_CHANNEL, __version__
 
 # --------------------------------------------------------------------------- theme
@@ -64,7 +68,48 @@ def _log_dir() -> str:
 
 
 def _new_logfile() -> str:
-    return os.path.join(_log_dir(), f"audit-{datetime.now():%Y%m%d-%H%M%S}.log")
+    folder = _log_dir()
+    try:
+        old_logs = sorted(
+            glob.glob(os.path.join(folder, "audit-*.log")),
+            key=os.path.getmtime,
+            reverse=True,
+        )
+        for old in old_logs[20:]:
+            os.remove(old)
+    except OSError:
+        pass
+    return os.path.join(folder, f"audit-{datetime.now():%Y%m%d-%H%M%S}.log")
+
+
+def _write_crash_log(exc_type, exc, tb) -> str:
+    path = os.path.join(_log_dir(), f"crash-{datetime.now():%Y%m%d-%H%M%S}.log")
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("".join(traceback.format_exception(exc_type, exc, tb)))
+    except OSError:
+        pass
+    return path
+
+
+def _install_crash_hooks() -> None:
+    def excepthook(exc_type, exc, tb):
+        _write_crash_log(exc_type, exc, tb)
+        try:
+            if sys.__stderr__ is not None:
+                sys.__stderr__.write("".join(traceback.format_exception(exc_type, exc, tb)))
+        except Exception:
+            pass
+
+    sys.excepthook = excepthook
+    try:
+        threading.excepthook = lambda args: _write_crash_log(
+            args.exc_type,
+            args.exc_value,
+            args.exc_traceback,
+        )
+    except Exception:
+        pass
 
 
 def _asset_path(name: str) -> str:
@@ -139,8 +184,16 @@ class App:
         self.user_var = tk.StringVar(value="useradmin")
         self.pass_var = tk.StringVar(value="ni7tk")
         self.ta_var = tk.StringVar(value="nE7jA%5m")
+        self.admin_port_var = tk.StringVar(value="8080")
+        self.check_vars: dict[str, tk.StringVar] = {}
+        self.check_labels: dict[str, tk.Label] = {}
+        saved = load_config()
+        self.host_var.set(str(saved.get("host") or self.host_var.get()))
+        self.user_var.set(str(saved.get("username") or self.user_var.get()))
+        self.admin_port_var.set(str(saved.get("admin_port") or self.admin_port_var.get()))
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.root.report_callback_exception = self._report_callback_exception
         self._build()
         self._set_icon()
         self.show_page("overview")
@@ -213,7 +266,7 @@ class App:
         ).pack(anchor="w")
         tk.Label(
             title_box,
-            text="M1 · LuCI 登录 / WAN 凭据读取 / 默认超管检测",
+            text="M1.2 · LuCI 登录 / WAN 凭据读取 / 超管检测",
             bg=BG,
             fg=MUTED,
             font=(FONT, 9),
@@ -443,6 +496,39 @@ class App:
         self._labeled_entry(body, "普通用户名", self.user_var, "路由器背面，通常 useradmin")
         self._labeled_entry(body, "普通密码", self.pass_var, "路由器背面，默认 ni7tk", show="*")
 
+        advanced = tk.Frame(body, bg=CARD)
+        advanced.pack(fill="x", pady=(10, 0))
+        for index, (label, variable, show) in enumerate(
+            [
+                ("超管口令", self.ta_var, "*"),
+                ("8080 端口", self.admin_port_var, ""),
+            ]
+        ):
+            column = tk.Frame(advanced, bg=CARD)
+            column.pack(side="left", fill="x", expand=True, padx=(0, 8) if index == 0 else (8, 0))
+            tk.Label(
+                column,
+                text=label,
+                bg=CARD,
+                fg=MUTED,
+                font=(FONT, 8),
+                anchor="w",
+            ).pack(fill="x", pady=(0, 3))
+            tk.Entry(
+                column,
+                textvariable=variable,
+                bg="#F9FAFB",
+                fg=TEXT,
+                insertbackground=TEXT,
+                relief="flat",
+                bd=0,
+                highlightthickness=1,
+                highlightbackground=BORDER,
+                highlightcolor=ACCENT,
+                font=(FONT, 10),
+                show=show,
+            ).pack(fill="x", ipady=5)
+
     def _labeled_entry(
         self,
         parent: tk.Widget,
@@ -544,6 +630,7 @@ class App:
                     font=(MONO, 10, "bold"),
                 )
                 self.pwd_entry.pack(side="left", fill="x", expand=True, ipady=3)
+                self._copy_button(row, key).pack(side="right", padx=(6, 0))
             else:
                 fg = ACCENT_DARK if key == "account" else TEXT
                 font = (MONO, 10, "bold") if key == "account" else (FONT, 9)
@@ -557,6 +644,61 @@ class App:
                     justify="left",
                     wraplength=300,
                 ).pack(side="left", fill="x", expand=True)
+                if key in ("account", "serial"):
+                    self._copy_button(row, key).pack(side="right", padx=(6, 0))
+
+        checklist_head = tk.Frame(body, bg=CARD)
+        checklist_head.pack(fill="x", pady=(8, 2))
+        tk.Label(
+            checklist_head,
+            text="检测项",
+            bg=CARD,
+            fg=TEXT,
+            font=(FONT, 9, "bold"),
+            anchor="w",
+        ).pack(side="left")
+
+        checklist = tk.Frame(body, bg=CARD)
+        checklist.pack(fill="x")
+        for key, label in [
+            ("login", "普通登录"),
+            ("device", "设备识别"),
+            ("account", "宽带账号"),
+            ("ta", "超管检测"),
+            ("wan", "WAN 密码"),
+        ]:
+            row = tk.Frame(checklist, bg=CARD)
+            row.pack(fill="x", pady=0)
+            dot = tk.Label(
+                row,
+                text="●",
+                bg=CARD,
+                fg="#CBD5E1",
+                font=(FONT, 7),
+                width=2,
+                anchor="w",
+            )
+            dot.pack(side="left")
+            tk.Label(
+                row,
+                text=label,
+                bg=CARD,
+                fg=MUTED,
+                font=(FONT, 8),
+                width=9,
+                anchor="w",
+            ).pack(side="left")
+            var = tk.StringVar(value="等待")
+            self.check_vars[key] = var
+            self.check_labels[key] = dot
+            tk.Label(
+                row,
+                textvariable=var,
+                bg=CARD,
+                fg=MUTED,
+                font=(FONT, 8),
+                anchor="w",
+            ).pack(side="left", fill="x", expand=True)
 
         self.result_hint = tk.Label(
             body,
@@ -578,6 +720,23 @@ class App:
         )
         self._button(actions, "打开日志", self.open_log_folder, primary=False, width=8).pack(
             side="left", padx=(8, 0)
+        )
+
+    def _copy_button(self, parent: tk.Widget, key: str) -> tk.Button:
+        return tk.Button(
+            parent,
+            text="复制",
+            command=lambda k=key: self.copy_value(k),
+            bg=CARD,
+            fg=BLUE,
+            activebackground=CARD,
+            activeforeground=BLUE,
+            bd=0,
+            relief="flat",
+            highlightthickness=0,
+            font=(FONT, 8),
+            cursor="hand2",
+            width=4,
         )
 
     def _button(
@@ -783,21 +942,22 @@ class App:
         h("4. 点击“开始检测”，等待 5–15 秒。", "BODY")
         h("5. 在右侧查看宽带账号、宽带密码和超管默认口令状态。", "BODY")
 
-        h("M1 能做什么", "H2")
+        h("本版能做什么", "H2")
         h("• 识别设备型号、序列号、固件版本、MAC 和 WAN IP。", "BULLET")
         h("• 普通用户登录 LuCI，读取宽带账号。", "BULLET")
-        h("• 检测 telecomadmin / nE7jA%5m 默认超管口令。", "BULLET")
+        h("• 检测默认或自定义超管口令。", "BULLET")
         h("• 登录 8080 装维后台，读取 WAN 配置并解出宽带密码。", "BULLET")
-        h("• 输出运行日志和 JSON/文本报告。", "BULLET")
+        h("• 逐项复制账号/密码，输出日志和 JSON/加密报告。", "BULLET")
+        h("• 记住上次目标和端口，启动时自动预检。", "BULLET")
 
-        h("M1 不做什么", "H2")
+        h("本版不做什么", "H2")
         h("• 不保存/修改 WAN，不重启，不恢复出厂。", "BULLET")
         h("• 不爆破超管口令，不开启 telnet，不写路由器文件。", "BULLET")
-        h("• 不包含 M2/M3 的配置提取和 RCE 模块。", "BULLET")
+        h("• 不包含 M2.1 的超密改动恢复和 RCE 模块。", "BULLET")
 
         h("常见问题", "H2")
         h("提示 8080 锁定：这是 3 次失败后的临时限制，等待约 60 秒再试。", "BODY")
-        h("超管检测失败：设备可能改过默认口令，M1 不会继续尝试。", "BODY")
+        h("超管检测失败：设备可能改过默认口令，本版不会继续爆破。", "BODY")
         h("读不到密码：确认 WAN 是 PPPoE，且 8080 页面可访问。", "BODY")
         h(
             "杀毒软件拦截：PyInstaller 单文件程序可能被误报，可改用源码运行或自行构建。",
@@ -880,24 +1040,43 @@ class App:
         if not username or not password:
             messagebox.showinfo("提示", "请填写普通用户名和密码")
             return
+        try:
+            admin_port = int(self.admin_port_var.get().strip() or "8080")
+            if not 1 <= admin_port <= 65535:
+                raise ValueError
+        except ValueError:
+            messagebox.showinfo("提示", "8080 端口必须是 1–65535 的数字")
+            return
         target = Target(
             host=host,
             username=username,
             password=password,
             ta_password=ta_password,
             timeout=8.0,
+            admin_port=admin_port,
+        )
+        save_config(
+            {
+                "host": target.normalized_host(),
+                "username": username,
+                "admin_port": admin_port,
+            }
         )
         self.stop_event.clear()
         self.current_result = None
         for key in self.vars:
             self.vars[key].set("—")
+        self.reset_checklist()
         self.pwd_entry.configure(state="normal")
         self.pwd_entry.delete(0, "end")
         self.pwd_entry.configure(state="readonly")
         self.res_state.configure(text="检测中…", fg=AMBER)
         self.result_hint.configure(text="正在登录并读取配置，请稍候…")
         self.set_running(True)
-        self.append_log("STEP", f"开始检测 {target.normalized_host()}")
+        self.append_log(
+            "STEP",
+            f"开始检测 {target.normalized_host()}（装维端口 {admin_port}）",
+        )
         self.worker = threading.Thread(target=self._worker, args=(target,), daemon=True)
         self.worker.start()
 
@@ -910,8 +1089,11 @@ class App:
         def log(level: str, message: str) -> None:
             self.queue.put(("log", level, message))
 
+        def progress(key: str, status: str, message: str) -> None:
+            self.queue.put(("progress", key, status, message))
+
         try:
-            result = run_audit(target, log, self.stop_event)
+            result = run_audit(target, log, self.stop_event, progress)
         except AuditCancelled:
             self.queue.put(("cancelled", None))
             return
@@ -927,6 +1109,8 @@ class App:
                 kind = item[0]
                 if kind == "log":
                     self.append_log(item[1], item[2])
+                elif kind == "progress":
+                    self.update_check(item[1], item[2], item[3])
                 elif kind == "done":
                     self.apply_result(item[1])
                     self.set_running(False)
@@ -944,8 +1128,34 @@ class App:
             pass
         self.root.after(100, self._poll)
 
+    def reset_checklist(self) -> None:
+        for key, var in self.check_vars.items():
+            var.set("等待")
+            self.check_labels[key].configure(fg="#CBD5E1")
+
+    def update_check(self, key: str, status: str, message: str) -> None:
+        if key not in self.check_vars:
+            return
+        colors = {
+            "wait": "#CBD5E1",
+            "run": BLUE,
+            "ok": GREEN,
+            "warn": AMBER,
+            "skip": "#9CA3AF",
+            "err": RED,
+        }
+        self.check_labels[key].configure(fg=colors.get(status, MUTED))
+        self.check_vars[key].set(message or status)
+
     def apply_result(self, result: AuditResult) -> None:
         self.current_result = result
+        if result.checks:
+            for key, payload in result.checks.items():
+                self.update_check(
+                    key,
+                    str(payload.get("status", "")),
+                    str(payload.get("message", "")),
+                )
         self.vars["model"].set(result.model or "—")
         self.vars["serial"].set(result.serial or "—")
         self.vars["firmware"].set(result.firmware or "—")
@@ -961,7 +1171,7 @@ class App:
             )
         elif result.superadmin_password:
             self.vars["ta"].set(
-                f"{result.superadmin_user} / {mask_secret(result.superadmin_password, 1)}"
+                f"{result.superadmin_user} / {result.superadmin_password}（自定义口令）"
             )
         else:
             self.vars["ta"].set("默认口令不可用")
@@ -984,6 +1194,17 @@ class App:
             self.result_hint.configure(text="已获取账号，但密码未获取；请查看日志。")
             self.append_log("WARN", "检测完成，但宽带密码为空")
 
+    def copy_value(self, key: str) -> None:
+        value = self.vars.get(key)
+        text = value.get() if value else ""
+        if not text or text == "—":
+            messagebox.showinfo("提示", "该项还没有结果")
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        labels = {"account": "宽带账号", "password": "宽带密码", "serial": "序列号"}
+        self.append_log("OK", f"已复制{labels.get(key, key)}到剪贴板")
+
     def copy_result(self) -> None:
         if not self.current_result:
             messagebox.showinfo("提示", "还没有检测结果")
@@ -1003,11 +1224,33 @@ class App:
             title="保存检测报告",
             defaultextension=".json",
             initialfile=default_name,
-            filetypes=[("JSON 报告", "*.json"), ("文本报告", "*.txt")],
+            filetypes=[
+                ("JSON 报告", "*.json"),
+                ("文本报告", "*.txt"),
+                ("加密报告", "*.tgct"),
+            ],
         )
         if not path:
             return
         try:
+            if path.lower().endswith(".tgct"):
+                password = simpledialog.askstring(
+                    "加密报告",
+                    "设置报告密码（打开时需要）：",
+                    show="*",
+                    parent=self.root,
+                )
+                if not password:
+                    return
+                payload = json.dumps(
+                    self.current_result.to_dict(redact=False),
+                    ensure_ascii=False,
+                    indent=2,
+                ).encode("utf-8")
+                with open(path, "wb") as handle:
+                    handle.write(encrypt_bytes(payload, password))
+                self.append_log("OK", f"加密报告已保存：{path}")
+                return
             if path.lower().endswith(".txt"):
                 content = self.current_result.summary_text(redact=False)
             else:
@@ -1019,7 +1262,13 @@ class App:
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(content)
             self.append_log("OK", f"报告已保存：{path}")
+        except CryptoUnavailable as exc:
+            self.append_log("ERROR", str(exc))
+            messagebox.showerror("加密不可用", str(exc))
         except OSError as exc:
+            self.append_log("ERROR", f"保存失败：{exc}")
+            messagebox.showerror("保存失败", str(exc))
+        except Exception as exc:  # noqa: BLE001
             self.append_log("ERROR", f"保存失败：{exc}")
             messagebox.showerror("保存失败", str(exc))
 
@@ -1040,10 +1289,28 @@ class App:
             mtu="1492",
             ifname="ppp1.3",
             elapsed=4.21,
+            checks={
+                "login": {"status": "ok", "message": "useradmin 登录成功"},
+                "device": {"status": "ok", "message": "TGCT-526G"},
+                "account": {"status": "ok", "message": "0755****@163.gd"},
+                "ta": {"status": "ok", "message": "默认口令可用"},
+                "wan": {"status": "ok", "message": "密码 8 位"},
+            },
         )
         self.apply_result(demo)
         self.set_status("演示数据", "#DBEAFE", BLUE)
         self.append_log("INFO", "已载入演示数据，仅用于界面预览。")
+
+    def _report_callback_exception(self, exc, value, tb) -> None:
+        path = _write_crash_log(exc, value, tb)
+        try:
+            self.append_log("ERROR", f"界面异常已写入 {path}")
+        except Exception:
+            pass
+        messagebox.showerror(
+            "界面异常",
+            f"操作出错：{value}\n\n崩溃日志：{path}",
+        )
 
     def on_close(self) -> None:
         self.stop_event.set()
@@ -1058,6 +1325,7 @@ class App:
             password=args.password,
             ta_password=args.ta_password,
             timeout=args.timeout,
+            admin_port=args.admin_port,
         )
 
         def log(level: str, message: str) -> None:
@@ -1080,13 +1348,14 @@ def main(argv: list[str] | None = None) -> int:
             pass
     parser = argparse.ArgumentParser(
         prog="tgct526g",
-        description="电信天翼TGCT526G宽带账号及超密获取软件（M1 只读检测）",
+        description="电信天翼TGCT526G宽带账号及超密获取软件（M1.2 稳定版）",
     )
     parser.add_argument("--cli", action="store_true", help="命令行模式，不启动 GUI")
     parser.add_argument("--host", default="192.168.1.1", help="路由器管理地址")
     parser.add_argument("--user", default="useradmin", help="普通用户名")
     parser.add_argument("--password", default="ni7tk", help="普通用户密码")
-    parser.add_argument("--ta-password", default="nE7jA%5m", help="默认超管口令")
+    parser.add_argument("--ta-password", default="nE7jA%5m", help="超管口令")
+    parser.add_argument("--admin-port", type=int, default=8080, help="8080 装维端口")
     parser.add_argument("--timeout", type=float, default=8.0, help="HTTP 超时秒数")
     parser.add_argument("--out", help="将 JSON 报告写入文件")
     parser.add_argument("--show-secrets", action="store_true", help="在终端输出明文密码")
@@ -1097,6 +1366,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cli:
         return App.run_cli(args)
 
+    _install_crash_hooks()
     _enable_dpi_awareness()
     root = tk.Tk()
     app = App(root)

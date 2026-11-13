@@ -28,6 +28,8 @@ class Target:
     password: str = "ni7tk"
     ta_password: str = "nE7jA%5m"
     timeout: float = 8.0
+    port: int = 80
+    admin_port: int = 8080
 
     def normalized_host(self) -> str:
         host = self.host.strip()
@@ -36,24 +38,28 @@ class Target:
         elif host.lower().startswith("https://"):
             host = host[8:]
         host = host.rstrip("/")
-        if host.endswith(":80"):
-            host = host[:-3]
+        if host.count(":") == 1:
+            maybe_host, maybe_port = host.rsplit(":", 1)
+            if maybe_port.isdigit():
+                host = maybe_host
         return host
 
     @property
     def origin(self) -> str:
-        return "http://" + self.normalized_host()
+        base = "http://" + self.normalized_host()
+        if self.port and self.port != 80:
+            base += f":{self.port}"
+        return base
 
     def with_port(self, port: int) -> "Target":
-        host = self.normalized_host()
-        if ":" in host:
-            host = host.rsplit(":", 1)[0]
         return Target(
-            host=f"{host}:{port}",
+            host=self.normalized_host(),
             username=self.username,
             password=self.password,
             ta_password=self.ta_password,
             timeout=self.timeout,
+            port=port,
+            admin_port=self.admin_port,
         )
 
 
@@ -70,6 +76,7 @@ class WanInfo:
 @dataclass
 class AuditResult:
     target: str = ""
+    admin_port: int = 8080
     model: str = ""
     serial: str = ""
     firmware: str = ""
@@ -89,6 +96,7 @@ class AuditResult:
     finished_at: str = ""
     error: str = ""
     notes: list[str] = field(default_factory=list)
+    checks: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self, redact: bool = False) -> dict[str, Any]:
         data = asdict(self)
