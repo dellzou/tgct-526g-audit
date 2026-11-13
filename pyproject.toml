@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tgct526g-audit"
+version = "0.1.0"
+description = "TGCT-526G 天翼网关 M1 只读安全审计工具（LuCI 登录、宽带凭据提取、默认超管检测）"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "dellzou" }]
+keywords = ["tgct-526g", "tianyi", "luci", "router-security", "cpe"]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pyinstaller>=6.0", "pillow>=10"]
+
+[project.scripts]
+tgct526g = "tgct526g.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
