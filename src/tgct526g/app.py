@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import os
 import queue
@@ -73,13 +74,43 @@ def _asset_path(name: str) -> str:
     return os.path.join(base, "assets", name)
 
 
+def _system_dpi() -> int:
+    """Return the effective Windows DPI, falling back to 96."""
+    if sys.platform != "win32":
+        return 96
+    try:
+        return int(ctypes.windll.user32.GetDpiForSystem())
+    except Exception:
+        pass
+    try:
+        hdc = ctypes.windll.user32.GetDC(0)
+        dpi = int(ctypes.windll.gdi32.GetDeviceCaps(hdc, 88))  # LOGPIXELSX
+        ctypes.windll.user32.ReleaseDC(0, hdc)
+        return dpi or 96
+    except Exception:
+        return 96
+
+
+def _enable_dpi_awareness() -> int:
+    """Make Tk render at native resolution instead of being bitmap-scaled."""
+    if sys.platform != "win32":
+        return 96
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # per-monitor aware
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+    return _system_dpi()
+
+
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title(f"{APP_NAME} v{__version__}")
         self.root.configure(bg=BG)
-        self.root.geometry("1240x780")
-        self.root.minsize(1100, 680)
+        self._apply_ui_scale()
         self._center()
 
         self.queue: queue.Queue = queue.Queue()
@@ -87,7 +118,6 @@ class App:
         self.stop_event = threading.Event()
         self.current_result: AuditResult | None = None
         self.logfile = _new_logfile()
-        self.pwd_visible = False
         self.pages: dict[str, tk.Frame] = {}
         self.nav_buttons: dict[str, tk.Button] = {}
         self.current_page = "overview"
@@ -117,9 +147,34 @@ class App:
         self._poll()
 
     # ------------------------------------------------------------------ layout
+    def _apply_ui_scale(self) -> None:
+        """Scale the window and Tk fonts for the current display DPI.
+
+        The previous build was DPI-unaware, so Windows bitmap-scaled the whole
+        window and text looked blurry.  We now declare per-monitor awareness and
+        choose a scale that both follows the DPI and fits the work area.
+        """
+        dpi = _system_dpi()
+        screen_w = self.root.winfo_screenwidth()
+        screen_h = self.root.winfo_screenheight()
+        scale = min(
+            dpi / 96.0,
+            max(0.85, (screen_w - 40) / 1240.0),
+            max(0.85, (screen_h - 90) / 780.0),
+        )
+        self.ui_scale = max(0.85, min(scale, 1.5))
+        # Tk's default scaling is 96/72; keep font metrics consistent with the
+        # pixel geometry chosen above.
+        self.root.tk.call("tk", "scaling", (96.0 * self.ui_scale) / 72.0)
+        self.root.minsize(
+            int(1100 * self.ui_scale),
+            int(680 * self.ui_scale),
+        )
+
     def _center(self) -> None:
         self.root.update_idletasks()
-        width, height = 1240, 780
+        width = int(1240 * self.ui_scale)
+        height = int(780 * self.ui_scale)
         x = max(0, (self.root.winfo_screenwidth() - width) // 2)
         y = max(0, (self.root.winfo_screenheight() - height) // 2 - 20)
         self.root.geometry(f"{width}x{height}+{x}+{y}")
@@ -150,15 +205,15 @@ class App:
         title_box.grid(row=0, column=0, sticky="w")
         tk.Label(
             title_box,
-            text="M1 只读安全检测",
+            text=APP_NAME,
             bg=BG,
             fg=TEXT,
-            font=(FONT, 18, "bold"),
+            font=(FONT, 17, "bold"),
             anchor="w",
         ).pack(anchor="w")
         tk.Label(
             title_box,
-            text="LuCI 登录 · 宽带凭据提取 · 默认超管检测",
+            text="M1 · LuCI 登录 / WAN 凭据读取 / 默认超管检测",
             bg=BG,
             fg=MUTED,
             font=(FONT, 9),
@@ -218,7 +273,7 @@ class App:
         ).pack(anchor="w")
         tk.Label(
             brand_text,
-            text="安全审计工具",
+            text="宽带账号及超密获取",
             bg=SIDEBAR,
             fg=MUTED,
             font=(FONT, 9),
@@ -487,25 +542,8 @@ class App:
                     bd=0,
                     highlightthickness=0,
                     font=(MONO, 10, "bold"),
-                    show="•",
                 )
                 self.pwd_entry.pack(side="left", fill="x", expand=True, ipady=3)
-                self.eye_btn = tk.Button(
-                    row,
-                    text="显示",
-                    command=self.toggle_password,
-                    bg=CARD,
-                    fg=BLUE,
-                    activebackground=CARD,
-                    activeforeground=BLUE,
-                    bd=0,
-                    relief="flat",
-                    highlightthickness=0,
-                    font=(FONT, 8),
-                    cursor="hand2",
-                    width=4,
-                )
-                self.eye_btn.pack(side="right")
             else:
                 fg = ACCENT_DARK if key == "account" else TEXT
                 font = (MONO, 10, "bold") if key == "account" else (FONT, 9)
@@ -856,9 +894,6 @@ class App:
         self.pwd_entry.configure(state="normal")
         self.pwd_entry.delete(0, "end")
         self.pwd_entry.configure(state="readonly")
-        self.pwd_visible = False
-        self.eye_btn.configure(text="显示")
-        self.pwd_entry.configure(show="•")
         self.res_state.configure(text="检测中…", fg=AMBER)
         self.result_hint.configure(text="正在登录并读取配置，请稍候…")
         self.set_running(True)
@@ -940,7 +975,7 @@ class App:
             self.set_status("完成", GREEN_SOFT, GREEN)
             self.res_state.configure(text="检测完成", fg=GREEN)
             self.result_hint.configure(
-                text="已获取宽带凭据。密码默认隐藏，点击“显示”查看；保存报告会写入明文，请妥善保管。"
+                text="已获取宽带凭据。密码已直接显示；保存报告会写入明文，请妥善保管。"
             )
             self.append_log("OK", "检测完成")
         else:
@@ -948,11 +983,6 @@ class App:
             self.res_state.configure(text="部分完成", fg=AMBER)
             self.result_hint.configure(text="已获取账号，但密码未获取；请查看日志。")
             self.append_log("WARN", "检测完成，但宽带密码为空")
-
-    def toggle_password(self) -> None:
-        self.pwd_visible = not self.pwd_visible
-        self.pwd_entry.configure(show="" if self.pwd_visible else "•")
-        self.eye_btn.configure(text="隐藏" if self.pwd_visible else "显示")
 
     def copy_result(self) -> None:
         if not self.current_result:
@@ -1048,7 +1078,10 @@ def main(argv: list[str] | None = None) -> int:
             stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
         except Exception:
             pass
-    parser = argparse.ArgumentParser(prog="tgct526g", description="TGCT-526G M1 只读安全审计")
+    parser = argparse.ArgumentParser(
+        prog="tgct526g",
+        description="电信天翼TGCT526G宽带账号及超密获取软件（M1 只读检测）",
+    )
     parser.add_argument("--cli", action="store_true", help="命令行模式，不启动 GUI")
     parser.add_argument("--host", default="192.168.1.1", help="路由器管理地址")
     parser.add_argument("--user", default="useradmin", help="普通用户名")
@@ -1064,6 +1097,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cli:
         return App.run_cli(args)
 
+    _enable_dpi_awareness()
     root = tk.Tk()
     app = App(root)
     if args.demo:

@@ -1,4 +1,4 @@
-"""TGCT-526G audit toolkit (M1, read-only)."""
+"""TGCT-526G broadband credential tool (M1, read-only)."""
 
 from .version import APP_NAME, __version__
 

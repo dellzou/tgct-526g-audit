@@ -1,6 +1,6 @@
 """License shown in the app and shipped as LICENSE."""
 
-LICENSE_TITLE = "TGCT-526G Audit Tool Non-Commercial License 1.0"
+LICENSE_TITLE = "电信天翼TGCT526G宽带账号及超密获取软件 非商业许可 1.0"
 
 LICENSE_SUMMARY = """本工具采用“非商业许可”：
 
@@ -12,7 +12,7 @@ LICENSE_SUMMARY = """本工具采用“非商业许可”：
 • 使用者应遵守当地法律法规，仅用于自有或实验室设备。
 """
 
-LICENSE_TEXT = """TGCT-526G Audit Tool Non-Commercial License 1.0
+LICENSE_TEXT = """电信天翼TGCT526G宽带账号及超密获取软件 非商业许可 1.0
 Copyright (c) 2026 dellzou. All rights reserved.
 
 1. 许可范围

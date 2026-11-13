@@ -2,7 +2,12 @@ $ErrorActionPreference = "Stop"
 
 Set-Location $PSScriptRoot
 $env:PYTHONPATH = Join-Path $PSScriptRoot "src"
-$version = "0.1.0"
+$version = "0.1.1"
+
+# Remove old onedir output so a locked/stale exe can never be paired with a
+# freshly collected _internal directory.
+if (Test-Path "dist") { Remove-Item "dist" -Recurse -Force }
+New-Item -ItemType Directory "dist" | Out-Null
 
 Write-Host "== unit tests =="
 python -m unittest discover -s tests -v

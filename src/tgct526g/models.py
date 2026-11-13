@@ -107,7 +107,7 @@ class AuditResult:
             password = mask_secret(password, 1)
         ta = "可用（默认口令）" if self.superadmin_is_default else ("不可用" if self.superadmin_password == "" else "可用")
         lines = [
-            "TGCT-526G 安全审计结果",
+            "TGCT-526G 宽带账号及超密获取结果",
             "=" * 32,
             f"目标        : {value(self.target)}",
             f"设备型号    : {value(self.model)}",

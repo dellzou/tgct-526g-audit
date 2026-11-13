@@ -1,12 +1,12 @@
-# TGCT-526G 安全审计工具（M1）
+# 电信天翼TGCT526G宽带账号及超密获取软件（M1）
 
-面向 **TGCT-526G 天翼网关** 的只读安全审计工具。M1 聚焦三件事：
+面向 **TGCT-526G 天翼网关** 的宽带账号及超密获取软件。M1 聚焦三件事：
 
 - 用路由器背面的普通账号登录 LuCI，读取宽带账号；
 - 检测 `telecomadmin / nE7jA%5m` 是否为默认超管口令；
 - 在默认超管可用时进入 8080 装维后台，从 WAN 页面解出 PPPoE 宽带密码。
 
-界面为浅色主题，Windows 单文件 exe，带运行日志、结果复制/保存、使用说明和协议页。
+界面为浅色主题，Windows 便携版，带运行日志、结果复制/保存、使用说明和协议页。
 
 > **M1 只读**：不保存 WAN、不重启、不恢复出厂、不开启 telnet、不写路由器文件。
 > 工具不会爆破超管口令；如果默认口令已被修改，M1 会明确提示并停止。
@@ -16,7 +16,7 @@
 ## 下载与运行
 
 1. 打开 [Releases](https://github.com/dellzou/tgct-526g-audit/releases/latest)。
-2. 下载 `TGCT526G-Audit-0.1.0-win64.zip`。
+2. 下载 `TGCT526G-Audit-0.1.1-win64.zip`。
 3. 解压到任意目录，双击 `TGCT526G-Audit.exe`。Windows SmartScreen 可能提示“未知发布者”，选择“更多信息 → 仍要运行”。
 4. 电脑连接到该路由器的 LAN 口或 WiFi。
 5. 填写管理地址（默认 `192.168.1.1`）和路由器背面的普通账号。
@@ -43,7 +43,7 @@ python -m tgct526g --cli --host 192.168.1.1 --user useradmin --password ni7tk `
   --ta-password nE7jA%5m --out result.json
 ```
 
-默认在终端隐藏密码；需要明文输出时加 `--show-secrets`。JSON 报告始终写入 `--out` 指定的文件。
+命令行默认隐藏密码；需要明文输出时加 `--show-secrets`。GUI 结果区直接显示密码。JSON 报告始终写入 `--out` 指定的文件。
 
 ## M1 功能
 
@@ -76,8 +76,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 
 产物：
 
-- `dist\TGCT526G-Audit-0.1.0-win64.zip`（GUI 便携版）
-- `dist\tgct526g-cli-0.1.0-win64.zip`（命令行便携版）
+- `dist\TGCT526G-Audit-0.1.1-win64.zip`（GUI 便携版）
+- `dist\tgct526g-cli-0.1.1-win64.zip`（命令行便携版）
 - `dist\SHA256SUMS.txt`（发布包校验值）
 
 ## 开发与测试
@@ -97,7 +97,7 @@ python -m unittest discover -s tests -v
 
 ## 许可
 
-本项目采用 **TGCT-526G Audit Tool Non-Commercial License 1.0**：
+本项目采用 **电信天翼TGCT526G宽带账号及超密获取软件 非商业许可 1.0**：
 
 - 允许个人、教育、研究、实验室环境使用；
 - **禁止未经权利人书面许可的商业用途**；
